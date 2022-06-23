@@ -24,6 +24,7 @@ The population-averaged models will be implemented using the R package NIMBLE. B
 Otherwise, packages used in the workshop can be installed using 
 
 ```
-install.packages(c('nimble', 'ggplot', 'outbreaks', 'ggforce', 'plyr', 'splines', 'raster', 'sp', 'spdep', 'gganimate', 'EpiILM', 'igraph'))
+install.packages(c('nimble', 'ggplot', 'outbreaks', 'ggforce', 'plyr', 'splines', 
+                   'raster', 'sp', 'spdep', 'gganimate', 'EpiILM', 'igraph'))
 ```
 
