@@ -10,9 +10,9 @@ Morning (9:00 - 12:00pm)
 Part I: Introduction to Deterministic Epidemics Models  
 Part II: Population-Averaged Models  
 
-Afternoon (1:00pm - 5:00pm)
-Part III: Individual-Level Models
-Part IV: Analyzing Infectious Disease Data with EpiILM
+Afternoon (1:00pm - 5:00pm)  
+Part III: Individual-Level Models  
+Part IV: Analyzing Infectious Disease Data with EpiILM  
 
 
 ## Installing Packages
