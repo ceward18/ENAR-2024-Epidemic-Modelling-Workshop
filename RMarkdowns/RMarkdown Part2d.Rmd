@@ -9,7 +9,6 @@ output: slidy_presentation
 library(nimble)
 library(outbreaks)
 library(ggplot2)
-library(ggforce)
 library(plyr)
 ```
 
