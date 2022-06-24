@@ -1,0 +1,448 @@
+---
+title: "SIR Model with Infectious Duration Dependent Transmissibility"
+output: slidy_presentation
+---
+
+# Infectious Duration Dependent Transmissibility
+
+```{r}
+library(nimble)
+library(splines)
+library(ggplot2)
+```
+
+# Writing the model for simulation
+
+Flat priors are used because values will be directly specified when simulating,
+but providing a prior distribution flags the node as stochastic.
+
+```{r}
+# nimbleFunction for logistic decay
+logitDecay <- nimbleFunction(     
+    run = function(x = double(1), w0 = double(0), k = double(0)) {
+        returnType(double(1))
+        
+        result <- 1 / (1 + exp(k * (x - w0)))
+        
+        return(result)
+    })
+
+# nimbleFunction to get transmission probability
+p_SI_t <- nimbleFunction(     
+    run = function(beta = double(0), I = double(1), 
+                   idd_curve = double(1), N = double(0)) {
+        returnType(double(0))
+        
+        transRate <-  beta * sum(I * idd_curve) / N
+        result <- 1 - exp(-transRate)
+        
+        return(result)
+    })
+
+# model code for simulation
+SIR_IDD_code <-  nimbleCode({
+    
+    S[1] <- N - sum(I0[1:maxInf]) - R0
+    I[1, 1:maxInf] <- I0[1:maxInf]
+    R[1] <- R0
+    
+    idd_curve[1:maxInf] <- logitDecay(1:maxInf, w0, k)
+    
+    ### loop over time
+    for(t in 1:tau) {
+        
+        probSI[t] <- p_SI_t(beta[t], I[t, 1:maxInf], idd_curve[1:maxInf], N)
+        
+        Istar[t] ~ dbin(probSI[t], S[t])
+        
+        # update S, I, R
+        S[t + 1] <- S[t] - Istar[t]
+        I[t + 1, 2:maxInf] <- I[t, 1:(maxInf - 1)]  # shift current I by one day
+        I[t + 1, 1] <- Istar[t]                     # add newly infectious
+        R[t + 1] <- R[t] + I[t, maxInf]
+        
+        beta[t] ~ dflat()
+    }
+    
+    # priors
+    w0 ~ dflat()
+    k ~ dflat()
+    
+})
+```
+
+# Specify transmission over epidemic time
+
+```{r}
+# length of epidemic
+tau <- 150
+
+# matrix to describe intensity process
+x <- cumsum(1:tau > 60) / 100
+beta1 <- -1.7
+beta2 <- -4
+betat <- exp(beta1 + beta2 * x)
+
+plot(betat, main = 'beta[t]', xlab = 'Epidemic time')
+```
+
+# Specify the IDD Curve
+
+```{r}
+
+# length of infectious period
+maxInf <- 15
+
+# IDD logistic decay parameters
+w0 <- 8
+k <- 1.5
+
+
+plot(logitDecay(1:maxInf, w0, k), type = 'l', xlab = 'Day of infection')
+```
+
+# Simulate an epidemic
+
+```{r}
+
+constantsList <- list(tau = tau,
+                      N = 1e6,
+                      I0 = c(2, rep(0, maxInf - 1)),
+                      R0 = 0,
+                      maxInf = maxInf)
+
+initsList <- list(beta = betat,
+                  w0 = w0,
+                  k = k)
+
+
+iddModel <- nimbleModel(SIR_IDD_code, 
+                        constants = constantsList,
+                        inits = initsList)
+
+
+
+# exclude data from parent nodes
+dataNodes <- c('Istar')
+dataNodes <- iddModel$expandNodeNames(dataNodes, returnScalarComponents = TRUE)
+parentNodes <- iddModel$getParents(dataNodes, stochOnly = TRUE)
+parentNodes <- parentNodes[-which(parentNodes %in% dataNodes)]
+parentNodes <- iddModel$expandNodeNames(parentNodes, returnScalarComponents = TRUE)
+nodesToSim <- iddModel$getDependencies(parentNodes, self = FALSE, downstream = T)
+
+set.seed(1)
+iddModel$simulate(nodesToSim, includeData = TRUE)
+
+
+iddModel$I0
+head(iddModel$I, 20)
+head(iddModel$Istar, 20)
+
+simI <- iddModel$I
+colnames(simI) <- paste0('I_', 1:maxInf)
+
+head(cbind(S = iddModel$S, Istar = iddModel$Istar, simI, R = iddModel$R), 20)
+
+plot(iddModel$Istar, type = 'l', xlab = 'Epidemic time', ylab = 'New cases')
+```
+
+
+# Application - NYC Covid-19 first wave
+
+```{r}
+### Read in data from GitHub
+nyc <-read.csv("https://raw.githubusercontent.com/nychealth/coronavirus-data/master/trends/cases-by-day.csv") 
+
+nyc <- nyc[,c('date_of_interest', 'CASE_COUNT')]
+colnames(nyc) <- c('date', 'dailyCases')
+
+# format dates
+nyc$date <- as.Date(nyc$date, format = '%m/%d/%Y')
+
+# 7-day moving average of cases to account for reporting delays
+# calculate moving average for smoothing
+movingAverage <- function(x, bw) {
+    n <- length(x)
+    bw <- floor(bw)
+    out <- rep(0, n)
+    for (i in 1:n) {
+        if (i < bw) {
+            t1 = 1; t2 = i
+        } else {
+            t1 = i - bw + 1; t2 = i
+        }
+        out[i] <- mean(x[t1:t2])
+    }
+    return(out)
+}
+nyc$smoothedCases <- round(movingAverage(nyc$dailyCases, 7))
+
+# population
+nyc$Population <- 8.419*1e6
+
+# peak 1 - Feb 29 - July 1, 2020
+startDate <- as.Date('2020-02-29')
+endDate <- as.Date('2020-07-01')
+nycPeak1 <- nyc[nyc$date >= startDate & nyc$date < endDate,]
+
+head(nycPeak1)
+
+plot(nycPeak1$date, nycPeak1$smoothedCases, type = 'l')
+
+```
+
+
+# Model fitting
+
+Use basis splines to model $\beta_t$.
+
+```{r}
+
+# nimbleFunction for logistic decay
+logitDecay <- nimbleFunction(     
+    run = function(x = double(1), w0 = double(0), k = double(0)) {
+        returnType(double(1))
+        
+        result <- 1 / (1 + exp(k * (x - w0)))
+        
+        return(result)
+    })
+
+# nimbleFunction to get transmission probability
+p_SI_t <- nimbleFunction(     
+    run = function(beta = double(0), I = double(1), 
+                   idd_curve = double(1), N = double(0)) {
+        returnType(double(0))
+        
+        transRate <-  beta * sum(I * idd_curve) / N
+        result <- 1 - exp(-transRate)
+        
+        return(result)
+    })
+
+# nimbleFunction to get R0(t)
+getR0 <- nimbleFunction(     
+    run = function(beta = double(0), idd_curve = double(1), N = double(0)) {
+        returnType(double(0))
+        
+        result <- N * sum(1 - exp(- beta * idd_curve / N))
+        
+        return(result)
+    })
+
+nyc_code <-  nimbleCode({
+    
+    S[1] <- N - sum(I0[1:maxInf]) - R0
+    I[1, 1:maxInf] <- I0[1:maxInf]
+    R[1] <- R0
+    
+    idd_curve[1:maxInf] <- logitDecay(1:maxInf, w0, k)
+    
+    ### loop over time
+    for(t in 1:tau) {
+        
+        beta[t] <- exp(inprod(b[1:p], XBasis[t, 1:p]))
+        
+        probSI[t] <- p_SI_t(beta[t], I[t, 1:maxInf], idd_curve[1:maxInf], N)
+        
+        Istar[t] ~ dbin(probSI[t], S[t])
+        
+        # update S, I, R
+        S[t + 1] <- S[t] - Istar[t]
+        I[t + 1, 2:maxInf] <- I[t, 1:(maxInf - 1)]  # shift current I by one day
+        I[t + 1, 1] <- Istar[t]                     # add newly infectious
+        R[t + 1] <- R[t] + I[t, maxInf]
+        
+        reproNum[t] <- getR0(beta[t],  idd_curve[1:maxInf], N)
+        
+        
+    }
+    
+    # priors
+    for (i in 1:p) {
+        b[i] ~ dnorm(0, sd = 4)
+    }
+    w0 ~ dnorm(4, sd = 0.1)
+    k ~ dgamma(100, 100)
+    
+})
+```
+
+Knots of the basis splines will be determined by important dates:
+
+* March 7 - state of emergency declared
+
+* March 16/17 - NYC public schools/bars and restaurants close
+
+* March 22 - Stay at home order for non-essential workers
+
+* June 8 - Phase 1 reopening
+
+* June 22 - Phase 2 reopening
+
+
+
+```{r}
+# get data
+incData <- nycPeak1$smoothedCases
+
+# initial conditions from first 1 day
+idxStart <- 1
+I0 <- sum(incData[idxStart])
+
+incData <- incData[-idxStart]
+
+# length of infectious period
+maxInf <- 10
+
+# length of epidemic
+tau <- length(incData)
+
+# basis matrix (move left boundary so start point is not fixed at 0)
+
+# knots at important change points
+date1 <- which(nycPeak1$date[-idxStart] == as.Date('2020-03-07'))
+date2 <- which(nycPeak1$date[-idxStart] == as.Date('2020-03-16'))
+date3 <- which(nycPeak1$date[-idxStart] == as.Date('2020-03-22'))
+date4 <- which(nycPeak1$date[-idxStart] == as.Date('2020-06-08'))
+date5 <- which(nycPeak1$date[-idxStart] == as.Date('2020-06-22'))
+
+knots <- c(date1, date2, date3, date4, date5)
+
+XBasis <- bs(1:tau, Boundary.knots = c(-50, tau), knots = knots)
+p <- ncol(XBasis)
+
+constantsList <- list(tau = tau,
+                      N = nycPeak1$Population[1],
+                      I0 = c(I0, rep(0, maxInf - 1)),
+                      R0 = 0,
+                      maxInf = maxInf,
+                      XBasis = XBasis,
+                      p = p)
+
+dataList <- list(Istar = incData)
+
+nycModel <- nimbleModel(nyc_code, 
+                        constants = constantsList,
+                        data = dataList)
+
+nycI <- nycModel$I
+colnames(nycI) <- paste0('I_', 1:maxInf)
+head(cbind(S = nycModel$S, Istar = nycModel$Istar, nycI, R = nycModel$R), 20)
+```
+
+Initial values are not specified so that they are drawn randomly from the prior
+for each chain.
+
+Fit model:
+
+```{r}
+myConfig <- configureMCMC(nycModel)
+
+# block sampler for transmission parameters
+paramsForBlock <- c('b', 'w0', 'k')
+myConfig$removeSampler(paramsForBlock)
+myConfig$addSampler(target = paramsForBlock, type = "RW_block",
+                    control = list(adaptInterval = 100,
+                                   propCov = diag(c(rep(1, p), 0.5, 0.5))))
+
+myConfig$addMonitors(c('idd_curve', 'reproNum'))
+
+myConfig
+
+
+myMCMC <- buildMCMC(myConfig)
+compiled <- compileNimble(nycModel, myMCMC) 
+
+system.time({
+    samples <- runMCMC(compiled$myMCMC, 
+                       niter = 100000, nburnin = 80000, 
+                       setSeed = c(1, 2, 3),
+                       nchains = 3)
+})
+
+```
+
+# Check convergence 
+
+Using visual inspection of trace plots
+
+```{r}
+paramSamples1 <- samples$chain1[,-grep('idd|reproNum', colnames(samples$chain1))]
+paramSamples2 <- samples$chain2[,-grep('idd|reproNum', colnames(samples$chain2))]
+paramSamples3 <- samples$chain3[,-grep('idd|reproNum', colnames(samples$chain3))]
+
+par(mfrow = c(2, 5))
+for (i in 1:ncol(paramSamples1)) {
+    plot(paramSamples1[,i], type = 'l', main = colnames(paramSamples1)[i])
+    lines(paramSamples2[,i], col = 'tomato')
+    lines(paramSamples3[,i], col = 'dodgerblue')
+}
+```
+
+# Posterior for IDD curve
+
+```{r}
+iddCurveSamples <- rbind(samples$chain1[,grep('idd', colnames(samples$chain1))],
+                         samples$chain2[,grep('idd', colnames(samples$chain2))],
+                         samples$chain3[,grep('idd', colnames(samples$chain3))])
+
+iddMean <- colMeans(iddCurveSamples)
+iddCI <- apply(iddCurveSamples, 2, quantile, probs = c(0.025, 0.975))
+
+iddSummary <- data.frame(time = 1:maxInf, 
+                         mean = iddMean,
+                         lower = iddCI[1,],
+                         upper = iddCI[2,],
+                         priorMean = logitDecay(1:maxInf, 4, 1))
+
+ggplot(iddSummary, aes(x = time, y = mean, ymin = lower, ymax = upper)) +
+    geom_line(color = 'blue', size = 1) + 
+    geom_line(aes(y = priorMean), size = 1) +
+    geom_ribbon(fill = 'deepskyblue', alpha = 0.3) + 
+    theme_bw() +
+    ggtitle('Posterior IDD Transmissibility Curve compared to prior mean')
+```
+
+Black line is the prior mean IDD curve.
+
+# Posterior for R0(t)
+
+March 7 - state of emergency declared
+
+March 16 - NYC public schools close
+
+March 17 - NYC bars and restaurants close
+
+March 22 - Stay at home order for non-essential workers
+
+June 8 - Phase 1 reopening
+
+June 22 - Phase 2 reopening
+
+```{r}
+r0Samples <- rbind(samples$chain1[,grep('reproNum', colnames(samples$chain1))],
+                   samples$chain2[,grep('reproNum', colnames(samples$chain2))],
+                   samples$chain3[,grep('reproNum', colnames(samples$chain3))])
+
+r0Mean <- colMeans(r0Samples)
+r0CI <- apply(r0Samples, 2, quantile, probs = c(0.025, 0.975))
+
+dates <- nycPeak1$date[-idxStart]
+
+r0Summary <- data.frame(date = nycPeak1$date[-idxStart], 
+                        mean = r0Mean,
+                        lower = r0CI[1,],
+                        upper = r0CI[2,])
+
+ggplot(r0Summary, aes(x = date, y = mean, ymin = lower, ymax = upper)) +
+    geom_line(color = 'blue', size = 1) + 
+    geom_ribbon(fill = 'deepskyblue', alpha = 0.3) + 
+    theme_bw() +
+    geom_hline(yintercept = 1, linetype = 2) +
+    ylim(0, 9) +
+    ggtitle('NYC reproductive number over time')
+
+```
+
+
