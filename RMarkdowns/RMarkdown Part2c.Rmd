@@ -262,10 +262,10 @@ legend('topright', c('posterior mean', 'truth'), col = c('black', 'red'), lwd = 
 ```
 
 
-# Using a Stronger Prior for Gamma
+# Evaluating Prior Sensitivity for Gamma
 
 The previously used prior puts 90% probability on the mean infectious period 
-being between 4 and 6 days and is centered on 5 days.
+being between 4 and 6 days, centered on 5 days.
 
 ```{r}
 bb <- 348
@@ -274,20 +274,30 @@ pgamma(1/4, aa, bb) - pgamma(1/6, aa, bb)
 curve(dgamma(x, aa, bb))
 ```
 
-Now, let's use a stronger prior
+Now, we will compare this with a weaker and stronger prior, both also centered
+on 5 days.
 
-```{r}
-bb_2 <- 2000
+```{r, fig.width = 12}
+par(mfrow = c(1,2))
+bb_2 <- 57
 aa_2 <- 0.2 * bb_2
 pgamma(1/4, aa_2, bb_2) - pgamma(1/6, aa_2, bb_2)
-curve(dgamma(x, aa_2, bb_2))
+curve(dgamma(x, aa_2, bb_2), main = 'weaker prior')
+
+
+bb_3 <- 2000
+aa_3 <- 0.2 * bb_3
+pgamma(1/4, aa_3, bb_3) - pgamma(1/6, aa_3, bb_3)
+curve(dgamma(x, aa_3, bb_3), main = 'stronger prior')
 ```
 
-We will also use a joint MH proposal for beta and gamma to account for the correlation 
+We will also use a joint MH proposal for beta and gamma to try and account for the correlation 
 between these two parameters.
 
 ```{r}
 dataList <- list(Istar = trueIstar)
+
+# Weaker prior
 
 constantsList <- list(N = 10000,
                       I0 = 5,
@@ -296,9 +306,9 @@ constantsList <- list(N = 10000,
                       aa = aa_2,
                       bb = bb_2) 
 
-set.seed(4)
+set.seed(8)
 initsList <- list(beta = runif(1, 0, 1),
-                  gamma = rgamma(1, aa, bb), 
+                  gamma = rgamma(1, aa_2, bb_2), 
                   Rstar = c(rep(0, 4),
                             constantsList$I0, 
                             head(dataList$Istar, -5)))
@@ -308,10 +318,6 @@ sirModelFit <- nimbleModel(SIR_code,
                            constants = constantsList,
                            data = dataList,
                            inits = initsList)
-
-with(sirModelFit, cbind(S=S[-(tau + 1)], Istar, I=I[-(tau + 1)], 
-                        Rstar, R=R[-(tau + 1)]))[1:10,]
-
 
 myConfig <- configureMCMC(sirModelFit)
 
@@ -333,41 +339,88 @@ myMCMC <- buildMCMC(myConfig)
 
 system.time({
     compiled <- compileNimble(sirModelFit, myMCMC) 
-    samples2 <- runMCMC(compiled$myMCMC, niter = 100000, nburnin = 50000, setSeed = 5)
+    samplesWeak <- runMCMC(compiled$myMCMC, niter = 100000, nburnin = 50000, setSeed = 15)
 })
 
-head(samples2)
+
+#### Stronger prior
+
+dataList <- list(Istar = trueIstar)
+
+constantsList <- list(N = 10000,
+                      I0 = 5,
+                      R0 = 0,
+                      tau = length(dataList$Istar),
+                      aa = aa_3,
+                      bb = bb_3) 
+
+set.seed(1)
+initsList <- list(beta = runif(1, 0, 1),
+                  gamma = rgamma(1, aa_3, bb_3), 
+                  Rstar = c(rep(0, 4),
+                            constantsList$I0, 
+                            head(dataList$Istar, -5)))
+
+
+sirModelFit <- nimbleModel(SIR_code, 
+                           constants = constantsList,
+                           data = dataList,
+                           inits = initsList)
+
+myConfig <- configureMCMC(sirModelFit)
+
+myConfig$removeSamplers('Rstar') 
+myConfig$addSampler(target = c('Rstar'),
+                    type = "RstarUpdate")
+myConfig$addMonitors(c('Rstar'))
+
+# block sampler for transmission parameters
+paramsForBlock <- c('beta', 'gamma')
+myConfig$removeSampler(paramsForBlock)
+myConfig$addSampler(target = paramsForBlock, type = "RW_block",
+                    control = list(adaptInterval = 100,
+                                   propCov = diag(c(0.2, 0.2))))
+
+myConfig
+
+myMCMC <- buildMCMC(myConfig)
+
+system.time({
+    compiled <- compileNimble(sirModelFit, myMCMC) 
+    samplesStrong <- runMCMC(compiled$myMCMC, niter = 100000, nburnin = 50000, setSeed = 12)
+})
+
+
 ```
 
 
-```{r}
-par(mfrow = c(1,2))
-plot(samples2[,'beta'], type = 'l')
+```{r, fig.width = 12, fig.height=12}
+par(mfrow = c(2,2))
+plot(samplesWeak[,'beta'], type = 'l', main = 'beta - weaker prior')
 abline(h = 0.6, col = 'red')
-plot(samples2[,'gamma'], type = 'l')
+plot(samplesWeak[,'gamma'], type = 'l', main = 'gamma - weaker prior')
+abline(h = 0.2, col = 'red')
+plot(samplesStrong[,'beta'], type = 'l', main = 'beta - stronger prior')
+abline(h = 0.6, col = 'red')
+plot(samplesStrong[,'gamma'], type = 'l', main = 'gamma - stronger prior')
 abline(h = 0.2, col = 'red')
 ```
 
 # Compare Posterior distributions
 
-```{r}
-par(mfrow = c(1,2))
+```{r, fig.width = 12}
+par(mfrow = c(1,3))
 hist(samples[,'gamma'], freq = F, main = 'initial prior', xlim = c(0.12, 0.26))
 curve(dgamma(x, aa, bb), add = T, col = 'red')
 
-
-hist(samples2[,'gamma'], freq = F, main =  'stronger prior', xlim = c(0.12, 0.26))
+hist(samplesWeak[,'gamma'], freq = F, main =  'weaker prior', xlim = c(0.12, 0.26))
 curve(dgamma(x, aa_2, bb_2), add = T, col = 'red')
+
+hist(samplesStrong[,'gamma'], freq = F, main =  'stronger prior', xlim = c(0.12, 0.26))
+curve(dgamma(x, aa_3, bb_3), add = T, col = 'red')
+
+summary(samples[,'gamma'])
+summary(samplesWeak[,'gamma'])
+summary(samplesStrong[,'gamma'])
 ```
-
-
-
-
-
-
-
-
-
-
-
 
