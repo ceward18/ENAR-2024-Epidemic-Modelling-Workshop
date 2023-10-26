@@ -226,6 +226,7 @@ myConfig$addSampler(target = c('Rstar'),
 myConfig$addMonitors(c('Rstar'))
 myConfig
 
+nimbleOptions(MCMCusePredictiveDependenciesInCalculations = TRUE)
 myMCMC <- buildMCMC(myConfig)
 
 system.time({
@@ -335,6 +336,7 @@ myConfig$addSampler(target = paramsForBlock, type = "RW_block",
 
 myConfig
 
+nimbleOptions(MCMCusePredictiveDependenciesInCalculations = TRUE)
 myMCMC <- buildMCMC(myConfig)
 
 system.time({
@@ -383,6 +385,7 @@ myConfig$addSampler(target = paramsForBlock, type = "RW_block",
 
 myConfig
 
+nimbleOptions(MCMCusePredictiveDependenciesInCalculations = TRUE)
 myMCMC <- buildMCMC(myConfig)
 
 system.time({

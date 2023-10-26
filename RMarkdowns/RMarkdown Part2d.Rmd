@@ -273,6 +273,7 @@ myConfig$addMonitors(c('reproNum'))
 myConfig
 
 
+nimbleOptions(MCMCusePredictiveDependenciesInCalculations = TRUE)
 myMCMC <- buildMCMC(myConfig)
 compiled <- compileNimble(seirModel, myMCMC) 
 
