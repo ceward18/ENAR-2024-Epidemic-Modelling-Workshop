@@ -1,13 +1,13 @@
-# ISBA 2022 Workshop 
+# ENAR 2024 Workshop 
 
-Materials for the ISBA 2022 workshop "Bayesian Modelling of Epidemics: From Population to Individual-level Models"
+Materials for the ENAR 2024 workshop "Bayesian Modelling of Epidemics: From Population to Individual-level Models"
 
 Presented and created by Dr. Rob Deardon and Dr. Caitlin Ward
 
 ## Tentative Schedule
 
-Morning (9:00 - 12:00pm)  
-Part I: Introduction to Deterministic Epidemics Models  
+Morning (8:00 - 12:00pm)  
+Part I: Introduction to Deterministic Epidemics Models and Bayesian Inference
 Part II: Population-Averaged Models  
 
 Afternoon (1:00pm - 5:00pm)  
